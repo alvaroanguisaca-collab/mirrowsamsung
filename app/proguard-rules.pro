@@ -1,0 +1,4 @@
+-keep class com.fabi.galaxymirror.MainActivity { *; }
+-keep class com.fabi.galaxymirror.SenderActivity { *; }
+-keep class com.fabi.galaxymirror.ReceiverActivity { *; }
+-keep class com.fabi.galaxymirror.ProjectionService { *; }

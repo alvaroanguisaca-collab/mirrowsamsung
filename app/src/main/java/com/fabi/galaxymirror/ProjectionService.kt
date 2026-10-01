@@ -1,0 +1,20 @@
+package com.fabi.galaxymirror
+import android.app.*
+import android.content.*
+import android.hardware.display.DisplayManager
+import android.media.*
+import android.media.projection.*
+import android.os.*
+import java.io.*
+import java.net.*
+import java.util.concurrent.atomic.AtomicBoolean
+class ProjectionService:Service(){
+ companion object{const val EXTRA_RESULT_CODE="result_code";const val EXTRA_RESULT_DATA="result_data";const val EXTRA_RECEIVER_IP="receiver_ip";const val CHANNEL="gm_stream";const val ID=41}
+ private val running=AtomicBoolean(false);private var projection:MediaProjection?=null;private var codec:MediaCodec?=null;private var display:android.hardware.display.VirtualDisplay?=null;private var worker:Thread?=null
+ override fun onCreate(){super.onCreate();getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL,"Galaxy Mirror",NotificationManager.IMPORTANCE_LOW));val stop=PendingIntent.getService(this,1,Intent(this,ProjectionService::class.java).setAction("STOP"),PendingIntent.FLAG_IMMUTABLE);startForeground(ID,Notification.Builder(this,CHANNEL).setContentTitle("Galaxy Mirror").setContentText("Compartiendo pantalla").setSmallIcon(android.R.drawable.ic_menu_share).setOngoing(true).addAction(Notification.Action.Builder(null,"DETENER",stop).build()).build())}
+ override fun onStartCommand(x:Intent?,f:Int,id:Int):Int{if(x?.action=="STOP"){stopSelf();return START_NOT_STICKY};if(running.get())return START_STICKY;val code=x?.getIntExtra(EXTRA_RESULT_CODE,Activity.RESULT_CANCELED)?:return START_NOT_STICKY;@Suppress("DEPRECATION") val data=x.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)?:return START_NOT_STICKY;val ip=x.getStringExtra(EXTRA_RECEIVER_IP)?:return START_NOT_STICKY;start(code,data,ip);return START_STICKY}
+ private fun start(code:Int,data:Intent,ip:String){running.set(true);projection=getSystemService(MediaProjectionManager::class.java).getMediaProjection(code,data);projection?.registerCallback(object:MediaProjection.Callback(){override fun onStop(){stopSelf()}},Handler(Looper.getMainLooper()));val fmt=MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC,1920,1080).apply{setInteger(MediaFormat.KEY_COLOR_FORMAT,MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);setInteger(MediaFormat.KEY_BIT_RATE,8_000_000);setInteger(MediaFormat.KEY_FRAME_RATE,30);setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,1)};codec=MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply{configure(fmt,null,null,MediaCodec.CONFIGURE_FLAG_ENCODE);val s=createInputSurface();start();display=projection?.createVirtualDisplay("GalaxyMirror",1920,1080,320,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,s,null,null)};worker=Thread{stream(ip)}.apply{start()}}
+ private fun stream(ip:String){val info=MediaCodec.BufferInfo();while(running.get()){try{Socket().use{s->s.tcpNoDelay=true;s.connect(InetSocketAddress(ip,MirrorProtocol.VIDEO_PORT),MirrorProtocol.CONNECT_TIMEOUT_MS);val o=DataOutputStream(BufferedOutputStream(s.getOutputStream()));val i=DataInputStream(BufferedInputStream(s.getInputStream()));o.writeInt(MirrorProtocol.MAGIC);o.writeInt(MirrorProtocol.VERSION);o.writeInt(1920);o.writeInt(1080);o.writeInt(30);o.flush();SecureChannel.senderHandshake(this,i,o).use{sec->while(running.get()&&!s.isClosed){val n=codec!!.dequeueOutputBuffer(info,10000);if(n>=0){val b=codec!!.getOutputBuffer(n)!!;val a=ByteArray(info.size);b.position(info.offset);b.limit(info.offset+info.size);b.get(a);val type=if(info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG!=0)MirrorProtocol.TYPE_CODEC_CONFIG else MirrorProtocol.TYPE_FRAME;sec.write(o,SecureChannel.Packet(type,info.flags,info.presentationTimeUs,a));codec!!.releaseOutputBuffer(n,false)}}}}}catch(_:Exception){try{Thread.sleep(1000)}catch(_:InterruptedException){}}}}
+ override fun onDestroy(){running.set(false);worker?.interrupt();try{display?.release()}catch(_:Exception){};try{codec?.stop();codec?.release()}catch(_:Exception){};try{projection?.stop()}catch(_:Exception){};super.onDestroy()}
+ override fun onBind(i:Intent?)=null
+}

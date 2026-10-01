@@ -1,0 +1,7 @@
+package com.fabi.galaxymirror
+import java.net.*
+import java.util.concurrent.atomic.AtomicBoolean
+object NetworkDiscovery{
+ fun findReceiver(timeoutMs:Int=3500):String?{DatagramSocket().use{socket->socket.broadcast=true;socket.soTimeout=500;val data=MirrorProtocol.DISCOVER.toByteArray();val packet=DatagramPacket(data,data.size,InetAddress.getByName("255.255.255.255"),MirrorProtocol.DISCOVERY_PORT);val end=System.currentTimeMillis()+timeoutMs;while(System.currentTimeMillis()<end){try{socket.send(packet)}catch(_:Exception){};try{val buf=ByteArray(128);val response=DatagramPacket(buf,buf.size);socket.receive(response);if(String(response.data,0,response.length)==MirrorProtocol.OFFER)return response.address.hostAddress}catch(_:SocketTimeoutException){}}};return null}
+ fun serveOffers(running:AtomicBoolean){val socket=DatagramSocket(null).apply{reuseAddress=true;bind(InetSocketAddress(MirrorProtocol.DISCOVERY_PORT));broadcast=true;soTimeout=1000};socket.use{while(running.get()){try{val buf=ByteArray(128);val p=DatagramPacket(buf,buf.size);socket.receive(p);if(String(p.data,0,p.length)==MirrorProtocol.DISCOVER){val r=MirrorProtocol.OFFER.toByteArray();socket.send(DatagramPacket(r,r.size,p.address,p.port))}}catch(_:SocketTimeoutException){}catch(_:Exception){if(!running.get())break}}}}
+}

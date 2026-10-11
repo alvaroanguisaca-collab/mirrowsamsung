@@ -1,0 +1,54 @@
+name: Build IAVISION signed APK
+on:
+  push:
+    branches: [iavision-build]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Expand source
+        run: |
+          base64 --decode iavision-build/source.b64 | tar -xz
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+      - name: SDK packages
+        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Download COCO model
+        run: |
+          mkdir -p IAVISION/app/src/main/assets
+          curl --fail --location --retry 3 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite' -o IAVISION/app/src/main/assets/efficientdet_lite0.tflite
+          test "$(stat -c%s IAVISION/app/src/main/assets/efficientdet_lite0.tflite)" -gt 1000000
+      - name: Compile release
+        run: cd IAVISION && gradle --no-daemon --stacktrace :app:assembleRelease
+      - name: Generate test signing key and sign APK
+        run: |
+          mkdir -p delivery
+          PASS="$(openssl rand -hex 20)"
+          keytool -genkeypair -keystore delivery/iavision-release.p12 -storetype PKCS12 -alias iavision -keyalg RSA -keysize 3072 -validity 7300 -dname 'CN=IAVISION Development,O=IAVISION,C=EC' -storepass "$PASS" -keypass "$PASS" -noprompt
+          echo "$PASS" > delivery/clave-firma.txt
+          zipalign -f 4 IAVISION/app/build/outputs/apk/release/app-release-unsigned.apk delivery/aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks delivery/iavision-release.p12 --ks-key-alias iavision --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --out delivery/IAVISION-v1.2-firmada.apk delivery/aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs delivery/IAVISION-v1.2-firmada.apk | tee delivery/verificacion-firma.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 delivery/IAVISION-v1.2-firmada.apk
+          sha256sum delivery/IAVISION-v1.2-firmada.apk > delivery/SHA256SUMS.txt
+          rm delivery/aligned.apk
+      - name: Upload signed APK and signing key (development only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: IAVISION-signed-and-dev-key
+          path: delivery/
+          retention-days: 30
